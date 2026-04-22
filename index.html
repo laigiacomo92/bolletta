@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulatore Bolletta PLACET EE Variabile</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <header class="app-header">
+        <div class="header-inner">
+            <h1>Simulatore Bolletta Elettrica</h1>
+            <p class="subtitle">Offerta PLACET — Energia Elettrica a Prezzo Variabile</p>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- ================= FORM PARAMETRI ================= -->
+        <section class="card params-card">
+            <header class="card-header">
+                <h2>Parametri di simulazione</h2>
+                <p>Modifica i valori o usa i predefiniti, poi calcola la bolletta.</p>
+            </header>
+
+            <form id="simForm" class="params-form">
+                <!-- Navigazione tra le sotto-schede dei parametri -->
+                <nav class="sub-tabs" role="tablist">
+                    <button type="button" class="sub-tab-btn active" data-panel="p-user">
+                        <span class="stb-index">1</span>
+                        <span class="stb-label">Profilo utenza</span>
+                    </button>
+                    <button type="button" class="sub-tab-btn" data-panel="p-energy">
+                        <span class="stb-index">2</span>
+                        <span class="stb-label">Materia energia</span>
+                    </button>
+                    <button type="button" class="sub-tab-btn" data-panel="p-grid">
+                        <span class="stb-index">3</span>
+                        <span class="stb-label">Trasporto e gestione</span>
+                    </button>
+                    <button type="button" class="sub-tab-btn" data-panel="p-tax">
+                        <span class="stb-index">4</span>
+                        <span class="stb-label">Oneri e imposte</span>
+                    </button>
+                </nav>
+
+                <!-- ============================================== -->
+                <!-- PANEL 1: Profilo utenza                         -->
+                <!-- Dati anagrafici e comportamento di consumo.     -->
+                <!-- ============================================== -->
+                <div class="sub-panel active" id="p-user">
+                    <div class="panel-intro">
+                        <h3>Profilo utenza</h3>
+                        <p>Definisci chi sei, quanto consumi e come distribuisci i consumi nell'arco dell'anno.</p>
+                    </div>
+                    <div class="panel-two-col">
+                        <fieldset class="group group-user">
+                            <legend>Dati anagrafici e contratto</legend>
+                            <div class="field">
+                                <label for="consumo_annuo">Consumo annuo (kWh)</label>
+                                <input type="number" id="consumo_annuo" step="1" value="2700" required>
+                            </div>
+                            <div class="field">
+                                <label for="potenza_impegnata">Potenza impegnata (kW)</label>
+                                <input type="number" id="potenza_impegnata" step="0.1" value="3.0" required>
+                            </div>
+                            <div class="field field-check">
+                                <label for="residente">
+                                    <input type="checkbox" id="residente" checked>
+                                    <span>Cliente domestico residente</span>
+                                </label>
+                            </div>
+                        </fieldset>
+
+                        <fieldset class="group">
+                            <legend>Distribuzione mensile dei consumi</legend>
+                            <div class="segmented" data-name="consumptionMode">
+                                <button type="button" class="seg-btn active" data-value="uniform">Uniforme</button>
+                                <button type="button" class="seg-btn" data-value="custom">Personalizzata</button>
+                            </div>
+                            <div class="price-year-picker">
+                                <label for="consumptionProfileSelect">Profilo utente</label>
+                                <select id="consumptionProfileSelect">
+                                    <option value="">— consumo personalizzato —</option>
+                                </select>
+                            </div>
+                            <p class="field-note" id="consumptionProfileNote">Scegli un profilo di consumo: i 12 valori mensili vengono precompilati e la modalità passa a <strong>Personalizzata</strong>. Restano comunque modificabili manualmente.</p>
+                            <div class="months-grid" id="monthsKwhGrid"></div>
+                            <div class="months-footer">
+                                <span>Totale distribuito:</span>
+                                <strong id="kwhTotalDisplay">2700,00</strong>
+                                <span>kWh</span>
+                                <span class="months-footer-delta" id="kwhDelta"></span>
+                            </div>
+                            <div class="consumption-chart-holder">
+                                <canvas id="consumptionChart"></canvas>
+                            </div>
+                        </fieldset>
+                    </div>
+                </div>
+
+                <!-- ============================================== -->
+                <!-- PANEL 2: Spesa materia energia                  -->
+                <!-- Voci che entrano nella formula:                 -->
+                <!--   Spesa = P_FIX + Σ (1+λ)(P_INGM+α)·CONS        -->
+                <!-- Divise per natura: commerciale vs regolatoria. -->
+                <!-- ============================================== -->
+                <div class="sub-panel" id="p-energy">
+                    <div class="panel-intro">
+                        <h3>Spesa materia energia</h3>
+                        <p>Componenti che determinano il costo dell'energia. In PLACET il venditore decide <em>solo</em> i parametri commerciali (spread, quota fissa, sconto) e il prezzo all'ingrosso.</p>
+                    </div>
+                    <div class="panel-two-col">
+                        <!-- Colonna sinistra: due box impilati -->
+                        <div class="col-stack">
+                            <fieldset class="group group-commercial">
+                                <legend>
+                                    <span class="legend-chip chip-commercial">Venditore</span>
+                                    Offerta commerciale
+                                </legend>
+                                <div class="field">
+                                    <label for="alpha">α — spread venditore (€/kWh)</label>
+                                    <input type="number" id="alpha" step="0.0001" value="0.0055">
+                                </div>
+                                <div class="field">
+                                    <label for="p_fix_v">P<sub>FIX,V</sub> — commercializzazione (€/anno)</label>
+                                    <input type="number" id="p_fix_v" step="0.01" value="60.00">
+                                </div>
+                                <div class="field">
+                                    <label for="sconto_una_tantum">Sconto una tantum (€)</label>
+                                    <input type="number" id="sconto_una_tantum" step="0.01" value="20.00">
+                                </div>
+                            </fieldset>
+
+                            <fieldset class="group group-commercial">
+                                <legend>
+                                    <span class="legend-chip chip-commercial">Venditore</span>
+                                    Calcolo prezzo energia
+                                </legend>
+                                <div class="segmented" data-name="priceMode">
+                                    <button type="button" class="seg-btn active" data-value="single">Prezzo unico</button>
+                                    <button type="button" class="seg-btn" data-value="monthly">Prezzo mensile</button>
+                                </div>
+                                <div class="field">
+                                    <label for="p_ingm_f0">P<sub>INGM,F0</sub> — prezzo ingrosso (€/kWh)</label>
+                                    <input type="number" id="p_ingm_f0" step="0.0001" value="0.1244">
+                                </div>
+                                <p class="field-note" id="priceModeNote">In modalità <strong>Prezzo unico</strong> questo valore viene applicato a tutti i 12 mesi. Passa a <strong>Prezzo mensile</strong> per definire un prezzo diverso mese per mese.</p>
+                            </fieldset>
+                        </div>
+
+                        <!-- Colonna destra: prezzo energia mensile con grafico -->
+                        <fieldset class="group">
+                            <legend>Prezzo energia mensile</legend>
+                            <div class="price-year-picker">
+                                <label for="priceYearSelect">Serie storica PUN</label>
+                                <select id="priceYearSelect" disabled>
+                                    <option value="">— seleziona anno —</option>
+                                </select>
+                                <button type="button" class="mini-btn" id="resetPriceYearBtn" disabled>Ripristina default</button>
+                            </div>
+                            <p class="field-note" id="priceYearNote">Passa a <strong>Prezzo mensile</strong> per selezionare un anno di riferimento del PUN. I valori restano comunque modificabili manualmente.</p>
+                            <div class="months-grid" id="monthsPriceGrid"></div>
+                            <div class="months-footer">
+                                <span>Prezzo medio ponderato:</span>
+                                <strong id="priceAvgDisplay">0,1244</strong>
+                                <span>€/kWh</span>
+                            </div>
+                            <div class="consumption-chart-holder">
+                                <canvas id="priceChart"></canvas>
+                            </div>
+                        </fieldset>
+                    </div>
+                </div>
+
+                <!-- ============================================== -->
+                <!-- PANEL 3: Trasporto e gestione                   -->
+                <!-- Dispacciamento + Tariffa uso rete.              -->
+                <!-- Voci regolatorie ARERA.                         -->
+                <!-- ============================================== -->
+                <div class="sub-panel" id="p-grid">
+                    <div class="panel-intro">
+                        <h3>Trasporto e gestione</h3>
+                        <p>Corrispettivi regolatori per la gestione del cliente, il dispacciamento, le perdite tecniche e l'uso delle reti di trasmissione/distribuzione.</p>
+                    </div>
+                    <div class="form-grid">
+                        <fieldset class="group group-regulated">
+                            <legend>
+                                <span class="legend-chip chip-regulated">ARERA</span>
+                                Perdite di rete
+                            </legend>
+                            <div class="field">
+                                <label for="lambda_losses">λ — fattore perdite di rete</label>
+                                <input type="number" id="lambda_losses" step="0.0001" value="0.102">
+                            </div>
+                            <p class="field-note">Correttivo che tiene conto delle perdite tecniche lungo la rete di distribuzione. Entra nella formula del prezzo materia: (1+λ)·(P<sub>INGM</sub>+α).</p>
+                        </fieldset>
+
+                        <fieldset class="group group-regulated">
+                            <legend>
+                                <span class="legend-chip chip-regulated">ARERA</span>
+                                Dispacciamento e commercializzazione
+                            </legend>
+                            <div class="field">
+                                <label for="dispbt_f">DISP<sub>BT,F</sub> — commercializzazione (€/anno)</label>
+                                <input type="number" id="dispbt_f" step="0.0001" value="0">
+                            </div>
+                            <div class="field">
+                                <label for="cdispd">c<sub>DISPd</sub> — dispacciamento (€/kWh)</label>
+                                <input type="number" id="cdispd" step="0.000001" value="0.016988">
+                            </div>
+                        </fieldset>
+
+                        <fieldset class="group group-regulated group-wide">
+                            <legend>
+                                <span class="legend-chip chip-regulated">ARERA</span>
+                                Tariffa uso rete
+                            </legend>
+                            <div class="fields-row">
+                                <div class="field">
+                                    <label for="sigma1">σ<sub>1</sub> — quota fissa (€/anno)</label>
+                                    <input type="number" id="sigma1" step="0.0001" value="23.04">
+                                </div>
+                                <div class="field">
+                                    <label for="sigma2">σ<sub>2</sub> — quota potenza (€/kW/anno)</label>
+                                    <input type="number" id="sigma2" step="0.0001" value="23.52">
+                                </div>
+                                <div class="field">
+                                    <label for="sigma3">σ<sub>3</sub> — quota energia (€/kWh)</label>
+                                    <input type="number" id="sigma3" step="0.000001" value="0.0119">
+                                </div>
+                                <div class="field">
+                                    <label for="uc3">UC3 — perequazione (€/kWh)</label>
+                                    <input type="number" id="uc3" step="0.000001" value="0.00276">
+                                </div>
+                                <div class="field">
+                                    <label for="uc6p_d">UC6 qualità — energia (€/kWh)</label>
+                                    <input type="number" id="uc6p_d" step="0.000001" value="0.00007">
+                                </div>
+                                <div class="field">
+                                    <label for="uc6s_d">UC6 qualità — potenza (€/kW/anno)</label>
+                                    <input type="number" id="uc6s_d" step="0.0001" value="0.1988">
+                                </div>
+                            </div>
+                        </fieldset>
+                    </div>
+                </div>
+
+                <!-- ============================================== -->
+                <!-- PANEL 4: Oneri e imposte                        -->
+                <!-- Oneri di sistema + accise + IVA.                -->
+                <!-- ============================================== -->
+                <div class="sub-panel" id="p-tax">
+                    <div class="panel-intro">
+                        <h3>Oneri e imposte</h3>
+                        <p>Oneri generali di sistema (finanziamento rinnovabili e altri obiettivi di interesse generale) e imposte statali.</p>
+                    </div>
+                    <div class="form-grid">
+                        <fieldset class="group group-regulated">
+                            <legend>
+                                <span class="legend-chip chip-regulated">ARERA</span>
+                                Oneri di sistema
+                            </legend>
+                            <div class="field">
+                                <label for="asos">A<sub>SOS</sub> — oneri rinnovabili (€/kWh)</label>
+                                <input type="number" id="asos" step="0.000001" value="0.028657">
+                            </div>
+                            <div class="field">
+                                <label for="arim">A<sub>RIM</sub> — rimanenti oneri (€/kWh)</label>
+                                <input type="number" id="arim" step="0.000001" value="0.001638">
+                            </div>
+                            <p class="field-note">Valori di default per domestico residente (DR). Per utenze DNR si usano aliquote diverse.</p>
+                        </fieldset>
+
+                        <fieldset class="group group-tax">
+                            <legend>
+                                <span class="legend-chip chip-tax">Stato</span>
+                                Imposte
+                            </legend>
+                            <div class="field">
+                                <label for="accisa_val">Accisa (€/kWh)</label>
+                                <input type="number" id="accisa_val" step="0.0001" value="0.0227">
+                            </div>
+                            <div class="field">
+                                <label for="iva_rate">Aliquota IVA</label>
+                                <input type="number" id="iva_rate" step="0.01" value="0.10">
+                            </div>
+                            <p class="field-note">Residenti ≤ 3 kW: esenzione accisa fino a 1.800 kWh/anno. IVA 10% residenti, 22% altrimenti.</p>
+                        </fieldset>
+                    </div>
+                </div>
+
+                <!-- Azioni sempre visibili -->
+                <div class="form-actions">
+                    <div class="form-nav">
+                        <button type="button" id="prevPanelBtn" class="btn btn-ghost btn-nav" disabled>← Precedente</button>
+                        <button type="button" id="nextPanelBtn" class="btn btn-ghost btn-nav">Successivo →</button>
+                    </div>
+                    <div class="form-main-actions">
+                        <button type="button" id="resetBtn" class="btn btn-ghost">Ripristina predefiniti</button>
+                        <button type="submit" class="btn btn-primary">Calcola bolletta</button>
+                    </div>
+                </div>
+            </form>
+        </section>
+
+        <!-- ================= RISULTATI ================= -->
+        <section id="results" class="results hidden">
+            <!-- Tabs -->
+            <div class="tabs">
+                <button class="tab-btn active" data-tab="report">Report dettagliato</button>
+                <button class="tab-btn" data-tab="monthly">Dettaglio mensile</button>
+                <button class="tab-btn" data-tab="breakdown">Costi fissi vs variabili</button>
+                <button class="tab-btn" data-tab="summary">Riepilogo totali</button>
+            </div>
+
+            <!-- Report dettagliato -->
+            <div id="tab-report" class="tab-panel active">
+                <div class="section-title-bar">
+                    <h2 class="section-title">Riepilogo costi annuo</h2>
+                    <div class="segmented view-switcher" data-name="reportView">
+                        <button type="button" class="seg-btn active" data-value="dashboard">Dashboard</button>
+                        <button type="button" class="seg-btn" data-value="table">Tabella</button>
+                    </div>
+                </div>
+
+                <!-- Vista 1: dashboard (card affiancate) -->
+                <div id="reportDashboard" class="report-view active">
+                    <div id="reportTables" class="tables-grid"></div>
+                </div>
+
+                <!-- Vista 2: tabella a accordion impilato -->
+                <div id="reportTable" class="report-view">
+                    <div class="acc-toolbar">
+                        <button type="button" class="mini-btn" data-acc-action="expand">Espandi tutto</button>
+                        <button type="button" class="mini-btn" data-acc-action="collapse">Comprimi tutto</button>
+                    </div>
+                    <div id="reportAccordion" class="report-accordion"></div>
+                </div>
+            </div>
+
+            <!-- Dettaglio mensile -->
+            <div id="tab-monthly" class="tab-panel">
+                <h2 class="section-title">Andamento mensile</h2>
+                <div class="card chart-card">
+                    <header class="card-header">
+                        <h3>Consumi e spesa energia materia per mese</h3>
+                        <p>Barre: kWh consumati — Linea: costo materia (€) con prezzo mensile × kWh × (1+λ) + α.</p>
+                    </header>
+                    <div class="monthly-chart-wrapper">
+                        <canvas id="monthlyChart"></canvas>
+                    </div>
+                </div>
+                <div class="card chart-card">
+                    <header class="card-header">
+                        <h3>Composizione mensile della bolletta</h3>
+                        <p>Barre impilate con tutte le componenti della bolletta + linea del prezzo unitario dell'energia. Utile per leggere la spesa in relazione al prezzo del kWh.</p>
+                    </header>
+                    <div class="monthly-chart-wrapper">
+                        <canvas id="monthlyStackedChart"></canvas>
+                    </div>
+                </div>
+                <div class="card">
+                    <header class="card-header">
+                        <h3>Tabella dettaglio mensile</h3>
+                        <p>Consumo, prezzo energia e costo materia per ciascun mese.</p>
+                    </header>
+                    <div id="monthlyTable"></div>
+                </div>
+            </div>
+
+            <!-- Costi fissi vs variabili -->
+            <div id="tab-breakdown" class="tab-panel">
+                <h2 class="section-title">Suddivisione costi fissi e variabili</h2>
+                <div class="breakdown-grid">
+                    <div class="card">
+                        <header class="card-header">
+                            <h3>Costi fissi</h3>
+                            <p>Non dipendono dal consumo (includono quote fisse e quote potenza).</p>
+                        </header>
+                        <div id="fixedTable"></div>
+                    </div>
+                    <div class="card">
+                        <header class="card-header">
+                            <h3>Costi variabili</h3>
+                            <p>Proporzionali al consumo annuo (kWh).</p>
+                        </header>
+                        <div id="variableTable"></div>
+                    </div>
+                </div>
+
+                <div class="card chart-card">
+                    <header class="card-header">
+                        <h3>Peso delle componenti</h3>
+                        <p>Clicca sulle voci per mostrarle o nasconderle nel grafico. Le imposte sono disattivate di default.</p>
+                    </header>
+                    <div class="chart-wrapper">
+                        <div class="chart-canvas-holder">
+                            <canvas id="pieChart"></canvas>
+                            <div id="pieCenter" class="pie-center"></div>
+                        </div>
+                        <div class="pie-side">
+                            <div class="pie-controls">
+                                <button type="button" class="mini-btn" data-action="all">Mostra tutto</button>
+                                <button type="button" class="mini-btn" data-action="none">Solo netto imposte</button>
+                            </div>
+                            <div id="pieLegend" class="pie-legend"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Riepilogo -->
+            <div id="tab-summary" class="tab-panel">
+                <h2 class="section-title">Totali finali</h2>
+                <div id="summaryCards" class="summary-grid"></div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="app-footer">
+        <p>Calcoli conformi allo schema PLACET EE variabile. Valori forniti a titolo di simulazione.</p>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

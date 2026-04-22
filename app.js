@@ -1903,7 +1903,7 @@
         if (!note) return;
         if (monthlyState.priceMode === "single") {
             note.innerHTML =
-                'In modalità <strong>Prezzo unico</strong> questo valore viene applicato a tutti i 12 mesi. Passa a <strong>Prezzo mensile</strong> per definire un prezzo diverso mese per mese.';
+                'In modalità <strong>Prezzo unico</strong> questo valore viene applicato a tutti i 12 mesi. Passa a <strong>Prezzo mensile</strong> (nel riquadro a destra) per definire un prezzo diverso mese per mese.';
         } else {
             note.innerHTML =
                 'In modalità <strong>Prezzo mensile</strong> i 12 valori a fianco sono il riferimento. Il campo qui sopra serve solo come base: modificandolo ora <em>non</em> si propaga ai singoli mesi.';
@@ -2544,84 +2544,206 @@
     }
 
     // =============================================================
-    // Sotto-schede del form (parametri in input)
+    // Wizard navigation
+    // Il simulatore è organizzato come un wizard lineare a 4 tappe:
+    //   1-3: configurazione dei parametri (form, una scheda per tema)
+    //   4:   report analitico unificato (pagina unica in 6 sezioni)
+    // La transizione dallo step 3 allo step 4 è il momento in cui il
+    // report viene "generato": riesegue la simulazione con i dati
+    // correnti così che il report sia sempre sincronizzato.
     // =============================================================
-    function setupSubTabs() {
-        const tabBtns = $$(".sub-tab-btn");
-        const panels = $$(".sub-panel");
-        const prevBtn = $("#prevPanelBtn");
-        const nextBtn = $("#nextPanelBtn");
+    const WIZARD_STEPS = [
+        { id: "p-user",     label: "Profilo utenza",        group: "config" },
+        { id: "p-energy",   label: "Materia energia",       group: "config" },
+        { id: "p-grid",     label: "Rete, oneri e imposte", group: "config" },
+        { id: "tab-report", label: "Report analitico",      group: "report" },
+    ];
 
-        const panelIds = tabBtns.map((b) => b.dataset.panel);
+    // Indice della prima tappa del gruppo report (per decidere quando
+    // fare il "Genera report"). Si ricava dinamicamente così è robusto
+    // a future riorganizzazioni del wizard.
+    const FIRST_REPORT_IDX = WIZARD_STEPS.findIndex((s) => s.group === "report");
 
-        function activate(idx) {
-            const id = panelIds[idx];
-            tabBtns.forEach((b, i) => b.classList.toggle("active", i === idx));
-            panels.forEach((p) => p.classList.toggle("active", p.id === id));
+    let currentStepIdx = 0;
 
-            prevBtn.disabled = idx === 0;
-            nextBtn.disabled = idx === panelIds.length - 1;
+    function activateStepPanel(idx) {
+        const target = WIZARD_STEPS[idx];
+        WIZARD_STEPS.forEach((s) => {
+            const panel = document.getElementById(s.id);
+            if (panel) panel.classList.toggle("active", s.id === target.id);
+        });
+        document.querySelectorAll(".wizard-step-btn").forEach((btn, i) => {
+            btn.classList.toggle("active", i === idx);
+            btn.classList.toggle("is-done", i < idx);
+        });
+    }
 
-            // Scrollare la barra delle sotto-schede per mantenere l'attivo visibile
-            const activeBtn = tabBtns[idx];
-            if (activeBtn && activeBtn.scrollIntoView) {
-                activeBtn.scrollIntoView({
-                    behavior: "smooth",
-                    block: "nearest",
-                    inline: "center",
-                });
+    function updateWizardActions() {
+        const prev = $("#prevStepBtn");
+        const next = $("#nextStepBtn");
+        const reset = $("#resetBtn");
+        const step = WIZARD_STEPS[currentStepIdx];
+        const isLast = currentStepIdx === WIZARD_STEPS.length - 1;
+        const isBeforeReport = currentStepIdx === FIRST_REPORT_IDX - 1;
+
+        if (prev) prev.disabled = currentStepIdx === 0;
+
+        if (next) {
+            next.disabled = isLast;
+            if (isBeforeReport) {
+                next.textContent = "Genera report →";
+                next.classList.add("btn-primary");
+                next.classList.remove("btn-ghost");
+            } else if (isLast) {
+                next.textContent = "Fine";
+            } else {
+                next.textContent = "Avanti →";
+                next.classList.add("btn-primary");
+                next.classList.remove("btn-ghost");
             }
         }
 
-        function currentIdx() {
-            return tabBtns.findIndex((b) => b.classList.contains("active"));
+        // Il reset ha senso solo mentre si configurano i parametri;
+        // nelle tappe di report lo nascondiamo per mantenere il focus
+        // sulla lettura dei risultati.
+        if (reset) {
+            reset.style.display = step.group === "config" ? "" : "none";
+        }
+    }
+
+    function goToStep(idx, { runSim = "auto" } = {}) {
+        const target = Math.max(0, Math.min(WIZARD_STEPS.length - 1, idx));
+        const prevStep = WIZARD_STEPS[currentStepIdx];
+        const nextStep = WIZARD_STEPS[target];
+        const crossingIntoReport =
+            prevStep.group === "config" && nextStep.group === "report";
+
+        // Quando entriamo nel gruppo report da una tappa di configurazione
+        // ri-eseguiamo la simulazione per garantire che i risultati siano
+        // allineati agli input correnti. Il caller può disabilitare il
+        // comportamento passando runSim: false (p.es. al primo load).
+        if (runSim === "auto" ? crossingIntoReport : runSim === true) {
+            runSimulation();
         }
 
-        tabBtns.forEach((btn, i) => {
-            btn.addEventListener("click", () => activate(i));
-        });
+        currentStepIdx = target;
+        activateStepPanel(target);
+        updateWizardActions();
 
-        prevBtn.addEventListener("click", () => {
-            const i = currentIdx();
-            if (i > 0) activate(i - 1);
-        });
+        // Dopo un cambio pagina i canvas di Chart.js possono avere
+        // dimensioni errate se erano nascosti al momento del render.
+        // Riallineiamo tutti i grafici a prescindere dal gruppo perché
+        // anche le tappe di configurazione (consumo mensile, prezzo
+        // mensile) contengono grafici.
+        setTimeout(() => {
+            if (pieChartInstance) pieChartInstance.resize();
+            if (monthlyChartInstance) monthlyChartInstance.resize();
+            if (monthlyStackedChartInstance) monthlyStackedChartInstance.resize();
+            if (consumptionChartInstance) consumptionChartInstance.resize();
+            if (priceChartInstance) priceChartInstance.resize();
+            scenarioChartInstances.forEach((c) => c.resize());
+        }, 30);
 
-        nextBtn.addEventListener("click", () => {
-            const i = currentIdx();
-            if (i < panelIds.length - 1) activate(i + 1);
-        });
-
-        // Evidenzia la sotto-scheda del campo attualmente focalizzato
-        $$(".sub-panel").forEach((panel) => {
-            panel.addEventListener("focusin", () => {
-                const panelId = panel.id;
-                tabBtns.forEach((b) =>
-                    b.classList.toggle("has-focus", b.dataset.panel === panelId && !b.classList.contains("active"))
-                );
+        // Mantiene visibile il pulsante attivo nella barra di navigazione
+        const btn = document.querySelectorAll(".wizard-step-btn")[target];
+        if (btn && btn.scrollIntoView) {
+            btn.scrollIntoView({
+                behavior: "smooth",
+                block: "nearest",
+                inline: "center",
             });
+        }
+
+        // Scroll dolce all'inizio della card del wizard
+        const card = document.querySelector(".wizard-card");
+        if (card && card.scrollIntoView) {
+            card.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+    }
+
+    function setupWizard() {
+        // Click diretto su una tappa
+        document.querySelectorAll(".wizard-step-btn").forEach((btn, i) => {
+            btn.addEventListener("click", () => goToStep(i));
         });
 
-        // Init
-        activate(0);
+        $("#prevStepBtn")?.addEventListener("click", () =>
+            goToStep(currentStepIdx - 1)
+        );
+        $("#nextStepBtn")?.addEventListener("click", () =>
+            goToStep(currentStepIdx + 1)
+        );
+
+        updateWizardActions();
     }
 
     // =============================================================
-    // Tabs
+    // Navigazione interna del report analitico
+    // La nav sticky in alto consente di saltare a una sezione cliccandone
+    // il titolo. L'evidenziazione della sezione attiva è basata su
+    // IntersectionObserver: la sezione con la maggior parte visibile nel
+    // viewport diventa quella "attiva" nella nav.
     // =============================================================
-    function setupTabs() {
-        $$(".tab-btn").forEach((btn) => {
-            btn.addEventListener("click", () => {
-                const target = btn.dataset.tab;
-                $$(".tab-btn").forEach((b) => b.classList.remove("active"));
-                $$(".tab-panel").forEach((p) => p.classList.remove("active"));
-                btn.classList.add("active");
-                $("#tab-" + target).classList.add("active");
+    function setupReportNav() {
+        const nav = document.querySelector(".report-nav");
+        if (!nav) return;
 
-                if (target === "breakdown" && pieChartInstance) {
-                    pieChartInstance.resize();
-                }
+        const links = Array.from(nav.querySelectorAll(".report-nav-link"));
+
+        // Click: scroll dolce alla sezione. Aggiungiamo un piccolo offset
+        // per compensare l'altezza della nav sticky + della wizard-tabs
+        // (gestito via scroll-margin-top in CSS).
+        links.forEach((link) => {
+            link.addEventListener("click", () => {
+                const id = link.dataset.target;
+                const section = document.getElementById(id);
+                if (!section) return;
+                // Aggiorna subito l'evidenziazione, così la UI reagisce
+                // anche se il browser non supporta scrollend/observer.
+                setActiveNavLink(id);
+                section.scrollIntoView({ behavior: "smooth", block: "start" });
             });
         });
+
+        function setActiveNavLink(id) {
+            links.forEach((l) =>
+                l.classList.toggle("active", l.dataset.target === id)
+            );
+        }
+
+        // IntersectionObserver: la sezione con più area visibile
+        // diventa la "attiva". Usiamo una rootMargin che sposta la zona
+        // di osservazione verso l'alto, così la transizione avviene
+        // quando il titolo della sezione arriva vicino alla nav sticky.
+        const sections = Array.from(
+            document.querySelectorAll("#tab-report .report-section")
+        );
+        if (!sections.length) return;
+
+        const visibility = new Map();
+        const observer = new IntersectionObserver(
+            (entries) => {
+                entries.forEach((e) => {
+                    visibility.set(e.target.id, e.intersectionRatio);
+                });
+                // Tra tutte le sezioni osservate, scegliamo quella con la
+                // quota di intersezione maggiore.
+                let bestId = null;
+                let bestRatio = -1;
+                visibility.forEach((ratio, id) => {
+                    if (ratio > bestRatio) {
+                        bestRatio = ratio;
+                        bestId = id;
+                    }
+                });
+                if (bestId && bestRatio > 0) setActiveNavLink(bestId);
+            },
+            {
+                rootMargin: "-140px 0px -55% 0px",
+                threshold: [0, 0.1, 0.25, 0.5, 0.75, 1],
+            }
+        );
+        sections.forEach((s) => observer.observe(s));
     }
 
     // Gestisce lo switch Dashboard/Tabella nel report e i click sulle sezioni
@@ -2696,27 +2818,228 @@
     }
 
     // =============================================================
+    // Renderer del nuovo report analitico
+    // Sezioni: 1) In sintesi  4) Fissi vs Variabili  5) Anno in 12 mesi
+    // =============================================================
+
+    // Palette delle 4 macro categorie, usata dalla composition-bar
+    // e dalla sua legenda nella sezione 1.
+    const MACRO_COLORS = {
+        materia:   "#2563eb", // Materia energia
+        trasporto: "#0ea5e9", // Trasporto e gestione
+        oneri:     "#8b5cf6", // Oneri di sistema
+        imposte:   "#f59e0b", // Imposte
+    };
+
+    // Dato il risultato della simulazione, calcola i quattro macro-importi
+    // che costituiscono la bolletta. La somma è pari al totale finale.
+    function computeMacroCategories(p, r) {
+        const materia =
+            (r.spesa_materia || 0) +
+            (r.spesa_comm_fissa || 0) +
+            (r.spesa_dispacciamento_var || 0);
+        const trasporto = r.spesa_rete || 0;
+        const oneri = r.spesa_oneri_var || 0;
+        const imposte = (r.accisa_totale || 0) + (r.iva_totale || 0);
+        // Lo sconto una tantum viene sottratto dall'imponibile prima dell'IVA,
+        // quindi il totale delle 4 macro è già netto dello sconto.
+
+        return [
+            { key: "materia",   label: "Materia energia",       value: materia,   color: MACRO_COLORS.materia },
+            { key: "trasporto", label: "Trasporto e gestione",  value: trasporto, color: MACRO_COLORS.trasporto },
+            { key: "oneri",     label: "Oneri di sistema",      value: oneri,     color: MACRO_COLORS.oneri },
+            { key: "imposte",   label: "Imposte (accisa + IVA)",value: imposte,   color: MACRO_COLORS.imposte },
+        ];
+    }
+
+    // Ritorna il nome della macro più "pesante" (usato nelle frasi automatiche).
+    function findLargestMacro(macros) {
+        return macros.reduce((a, b) => (b.value > a.value ? b : a));
+    }
+
+    // Sezione 1: popola KPI hero, composition-bar e insight.
+    function renderSynthesis(p, r) {
+        const total = r.totale_finale || 0;
+        const kwh = r.consumo_annuo || 0;
+        const monthlyAvg = total / 12;
+        const unitPrice = kwh > 0 ? total / kwh : 0;
+        const taxes = (r.accisa_totale || 0) + (r.iva_totale || 0);
+        const taxShare = total > 0 ? taxes / total : 0;
+
+        // KPI hero
+        setText("#kpiTotal", EUR(total));
+        setText(
+            "#kpiTotalSub",
+            `${kwh.toLocaleString("it-IT")} kWh/anno · ${p.potenza_impegnata} kW impegnati`
+        );
+        setText("#kpiMonthly", EUR(monthlyAvg));
+        setText("#kpiUnit", NUM4(unitPrice) + " €/kWh");
+        setText("#kpiTax", PCT(taxShare * 100));
+
+        // Composition bar
+        const macros = computeMacroCategories(p, r);
+        const macroTot = macros.reduce((s, m) => s + m.value, 0);
+        const bar = $("#compositionBar");
+        if (bar) {
+            bar.innerHTML = macros
+                .map((m) => {
+                    const pct = macroTot > 0 ? (m.value / macroTot) * 100 : 0;
+                    const label = pct >= 8 ? PCT(pct) : "";
+                    return `
+                        <div class="composition-segment"
+                             style="width:${pct}%;background:${m.color}"
+                             title="${m.label}: ${EUR(m.value)} (${PCT(pct)})">
+                            ${label ? `<span class="composition-segment-label">${label}</span>` : ""}
+                        </div>`;
+                })
+                .join("");
+        }
+
+        const legend = $("#compositionLegend");
+        if (legend) {
+            legend.innerHTML = macros
+                .map((m) => {
+                    const pct = macroTot > 0 ? (m.value / macroTot) * 100 : 0;
+                    const euroPer100 = (pct).toFixed(1);
+                    return `
+                        <span class="composition-legend-item">
+                            <span class="composition-legend-swatch" style="background:${m.color}"></span>
+                            <span>${m.label}</span>
+                            <span class="composition-legend-value">${euroPer100} €</span>
+                        </span>`;
+                })
+                .join("");
+        }
+
+        // Insight: frase automatica
+        const biggest = findLargestMacro(macros);
+        const biggestPct =
+            macroTot > 0 ? (biggest.value / macroTot) * 100 : 0;
+        const insightEl = $("#synthInsight");
+        if (insightEl) {
+            insightEl.innerHTML = `
+                Su ogni <strong>100 €</strong> che paghi in bolletta,
+                <strong>${biggestPct.toFixed(1)} €</strong> vanno in
+                <strong>${biggest.label.toLowerCase()}</strong>,
+                che è la voce più pesante. Il ${taxShare > 0 ? (taxShare * 100).toFixed(1) : "0"} % del totale
+                finisce invece in imposte (accisa + IVA).`;
+        }
+    }
+
+    // Sezione 4: insight su fissi vs variabili. Replica qui la
+    // classificazione (fissi = indipendenti dai kWh; variabili =
+    // proporzionali ai kWh) usata anche da renderFixedVariable.
+    function renderFixedVarInsight(p, r) {
+        const el = $("#fixedVarInsight");
+        if (!el) return;
+
+        const fissi =
+            (r.quota_fissa_materia || 0) +
+            (r.spesa_comm_fissa || 0) +
+            (r.rete_fissa || 0) +
+            (r.rete_sigma2 || 0) +
+            (r.rete_uc6s || 0);
+
+        const variabili =
+            (r.quota_variabile_materia || 0) +
+            (r.spesa_dispacciamento_var || 0) +
+            (r.rete_sigma3 || 0) +
+            (r.rete_uc3 || 0) +
+            (r.rete_uc6p || 0) +
+            (r.oneri_asos || 0) +
+            (r.oneri_arim || 0);
+
+        const tot = fissi + variabili;
+        if (tot <= 0) {
+            el.innerHTML = "";
+            return;
+        }
+        const varPct = (variabili / tot) * 100;
+        const fissoPct = (fissi / tot) * 100;
+
+        // Stima del risparmio a parità di condizioni se il consumo scende
+        // del 10 %: solo i costi variabili scalano linearmente con i kWh;
+        // l'IVA amplifica il risparmio sull'imponibile.
+        const iva = p.iva_rate || 0;
+        const savingNet = variabili * 0.10;
+        const savingWithVat = savingNet * (1 + iva);
+
+        el.innerHTML = `
+            Il <strong>${fissoPct.toFixed(0)} %</strong> della tua bolletta è <strong>fisso</strong>
+            (lo paghi comunque), mentre il <strong>${varPct.toFixed(0)} %</strong> è
+            <strong>variabile</strong> e dipende dai kWh consumati.
+            Se riduci i consumi del <strong>10 %</strong> risparmi circa
+            <strong>${EUR(savingWithVat)}</strong> l'anno (IVA inclusa).`;
+    }
+
+    // Sezione 5: tre "highlight card" con mese più caro, più economico e delta.
+    function renderMonthlyHighlights(p, r) {
+        const container = $("#monthlyHighlights");
+        if (!container) return;
+
+        const breakdown = buildMonthlyBreakdown(p, r);
+        if (!breakdown || breakdown.length === 0) {
+            container.innerHTML = "";
+            return;
+        }
+
+        // Mese più caro / più economico in assoluto (totale del mese)
+        let hot = breakdown[0];
+        let cold = breakdown[0];
+        breakdown.forEach((m) => {
+            if (m.total > hot.total) hot = m;
+            if (m.total < cold.total) cold = m;
+        });
+
+        const delta = hot.total - cold.total;
+        const deltaPct = cold.total > 0 ? (delta / cold.total) * 100 : 0;
+
+        container.innerHTML = `
+            <div class="mh-card mh-hot">
+                <span class="mh-card-label"><span class="mh-card-icon">▲</span> Mese più caro</span>
+                <span class="mh-card-month">${MONTHS_LONG[hot.month]}</span>
+                <span class="mh-card-sub">${EUR(hot.total)} · ${hot.kwh.toLocaleString("it-IT", { maximumFractionDigits: 0 })} kWh</span>
+            </div>
+            <div class="mh-card mh-cold">
+                <span class="mh-card-label"><span class="mh-card-icon">▼</span> Mese più economico</span>
+                <span class="mh-card-month">${MONTHS_LONG[cold.month]}</span>
+                <span class="mh-card-sub">${EUR(cold.total)} · ${cold.kwh.toLocaleString("it-IT", { maximumFractionDigits: 0 })} kWh</span>
+            </div>
+            <div class="mh-card mh-delta">
+                <span class="mh-card-label"><span class="mh-card-icon">±</span> Differenza</span>
+                <span class="mh-card-month">${EUR(delta)}</span>
+                <span class="mh-card-sub">+${deltaPct.toFixed(0)} % tra il mese più caro e il più economico</span>
+            </div>`;
+    }
+
+    // Helper per aggiornare testo solo se l'elemento esiste.
+    function setText(selector, text) {
+        const el = $(selector);
+        if (el) el.textContent = text;
+    }
+
+    // =============================================================
     // Main flow
     // =============================================================
     function runSimulation() {
         const inputs = readInputs();
         const result = computeBill(inputs);
 
-        // Memorizziamo i riferimenti annuali per permettere al selettore
-        // di periodo (tab "Peso delle componenti") di ricalcolare le
-        // slice senza rieseguire la simulazione completa.
+        // Riferimenti annuali memorizzati per il selettore di periodo
+        // (sezione "Composizione") che ricalcola le slice senza
+        // rieseguire tutta la simulazione.
         lastInputs = inputs;
         lastAnnualResult = result;
 
-        renderReport(inputs, result);
-        renderMonthlyDetail(inputs, result);
-        renderBreakdownSection(inputs, result);
-        renderPriceScenarios(inputs, result);
-        renderSummary(inputs, result);
-
-        $("#results").classList.remove("hidden");
-        // Scroll dolce verso i risultati
-        $("#results").scrollIntoView({ behavior: "smooth", block: "start" });
+        // Render delle sezioni del report (ordine = ordine di sezione)
+        renderSynthesis(inputs, result);                  // 1. In sintesi
+        renderBreakdownSection(inputs, result);           // 2. Composizione (pie + period + tables)
+        renderReport(inputs, result);                     // 3. Voci in dettaglio (dashboard + accordion)
+        renderFixedVarInsight(inputs, result);            // 4. Insight fissi vs variabili
+        renderMonthlyDetail(inputs, result);              // 5. Andamento mensile (grafici + tabella)
+        renderMonthlyHighlights(inputs, result);          // 5. Highlight mese caro/economico
+        renderPriceScenarios(inputs, result);             // 6. Scenari prezzo energia
+        renderSummary(inputs, result);                    // 1. <details> con totali dettagliati
     }
 
     // =============================================================
@@ -2757,24 +3080,31 @@
     }
 
     document.addEventListener("DOMContentLoaded", () => {
-        setupSubTabs();
-        setupTabs();
+        setupWizard();
+        setupReportNav();
         setupReportView();
         setupPieControls();
         setupPeriodSelector();
         setupMonthlyUI();
 
+        // Submit del form (Invio dentro un campo) = come "Genera report":
+        // esegue la simulazione e salta direttamente alla prima tappa
+        // di report.
         $("#simForm").addEventListener("submit", (e) => {
             e.preventDefault();
             runSimulation();
+            goToStep(FIRST_REPORT_IDX, { runSim: false });
         });
 
-        $("#resetBtn").addEventListener("click", () => {
+        $("#resetBtn")?.addEventListener("click", () => {
             resetDefaults();
             resetMonthlyState();
+            runSimulation();
         });
 
-        // Esegui il calcolo iniziale con i valori predefiniti
+        // Calcolo iniziale con i valori predefiniti (invisibile, serve solo
+        // a popolare i panel report nel caso in cui l'utente navighi
+        // direttamente a una tappa di report).
         runSimulation();
     });
 })();

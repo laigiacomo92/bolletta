@@ -309,7 +309,7 @@
             <div class="tabs">
                 <button class="tab-btn active" data-tab="report">Report dettagliato</button>
                 <button class="tab-btn" data-tab="monthly">Dettaglio mensile</button>
-                <button class="tab-btn" data-tab="breakdown">Costi fissi vs variabili</button>
+                <button class="tab-btn" data-tab="breakdown">Peso delle componenti</button>
                 <button class="tab-btn" data-tab="summary">Riepilogo totali</button>
             </div>
 
@@ -366,11 +366,50 @@
                     </header>
                     <div id="monthlyTable"></div>
                 </div>
+
+                <!-- Confronto scenari prezzo energia -->
+                <div class="card chart-card scenarios-card">
+                    <header class="card-header">
+                        <h3>Confronto scenari di prezzo energia</h3>
+                        <p id="scenariosIntro">Come cambia la composizione della bolletta al variare del prezzo della materia energia (P<sub>INGM</sub>).</p>
+                    </header>
+                    <div id="priceScenarios" class="scenarios-grid"></div>
+                </div>
             </div>
 
-            <!-- Costi fissi vs variabili -->
+            <!-- Peso delle componenti -->
             <div id="tab-breakdown" class="tab-panel">
-                <h2 class="section-title">Suddivisione costi fissi e variabili</h2>
+                <h2 class="section-title">Peso delle componenti</h2>
+
+                <!-- Selettore periodo di analisi -->
+                <div class="card period-selector">
+                    <div class="period-main">
+                        <div class="period-label-block">
+                            <div class="period-title">Periodo di analisi</div>
+                            <div class="period-sub" id="periodInfo">Totale annuo</div>
+                        </div>
+                        <div class="segmented period-mode-switcher" data-name="periodMode">
+                            <button type="button" class="seg-btn active" data-value="year">Annuale</button>
+                            <button type="button" class="seg-btn" data-value="avg-month">Mensile medio</button>
+                            <button type="button" class="seg-btn" data-value="custom">Periodo personalizzato</button>
+                        </div>
+                    </div>
+
+                    <!-- Controllo aggiuntivo: periodo personalizzato -->
+                    <div class="period-extra period-extra-chips" id="periodCustomControl" hidden>
+                        <div class="period-chips-header">
+                            <span class="period-chips-hint">Seleziona i mesi da includere:</span>
+                            <div class="period-chips-quick">
+                                <button type="button" class="mini-btn" data-period-quick="all">Tutti</button>
+                                <button type="button" class="mini-btn" data-period-quick="none">Nessuno</button>
+                                <button type="button" class="mini-btn" data-period-quick="winter">Inverno</button>
+                                <button type="button" class="mini-btn" data-period-quick="summer">Estate</button>
+                            </div>
+                        </div>
+                        <div class="period-chips" id="periodChipsGrid"></div>
+                    </div>
+                </div>
+
                 <div class="breakdown-grid">
                     <div class="card">
                         <header class="card-header">
@@ -390,8 +429,17 @@
 
                 <div class="card chart-card">
                     <header class="card-header">
-                        <h3>Peso delle componenti</h3>
-                        <p>Clicca sulle voci per mostrarle o nasconderle nel grafico. Le imposte sono disattivate di default.</p>
+                        <div class="pie-header">
+                            <div>
+                                <h3>Grafico a torta</h3>
+                                <p>Scegli il livello di aggregazione e clicca sulle voci della legenda per mostrarle o nasconderle.</p>
+                            </div>
+                            <div class="segmented pie-mode-switcher" data-name="pieMode">
+                                <button type="button" class="seg-btn active" data-value="macro">Macro</button>
+                                <button type="button" class="seg-btn" data-value="detailed">Dettagliato</button>
+                                <button type="button" class="seg-btn" data-value="fixedvar">Fissi vs Variabili</button>
+                            </div>
+                        </div>
                     </header>
                     <div class="chart-wrapper">
                         <div class="chart-canvas-holder">

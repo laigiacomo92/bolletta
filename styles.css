@@ -1179,10 +1179,43 @@ p {
     background: var(--primary-soft);
 }
 
+.pie-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 16px;
+    flex-wrap: wrap;
+}
+
+.pie-header > div:first-child {
+    min-width: 0;
+    flex: 1 1 220px;
+}
+
+.pie-mode-switcher {
+    flex: 0 0 auto;
+}
+
+.pie-mode-switcher .seg-btn {
+    padding: 7px 14px;
+    font-size: 12.5px;
+}
+
 .pie-legend {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    max-height: 520px;
+    overflow-y: auto;
+    padding-right: 2px;
+}
+
+.pie-legend::-webkit-scrollbar {
+    width: 6px;
+}
+.pie-legend::-webkit-scrollbar-thumb {
+    background: var(--border-strong);
+    border-radius: 3px;
 }
 
 .pie-legend-item {
@@ -1266,6 +1299,330 @@ p {
     .chart-canvas-holder {
         max-width: 300px;
     }
+}
+
+/* ============ Confronto scenari di prezzo ============ */
+.scenarios-card {
+    margin-top: 24px;
+}
+
+.scenarios-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 18px;
+    padding: 20px 24px 26px;
+}
+
+.scenarios-grid.is-single {
+    grid-template-columns: minmax(280px, 420px);
+    justify-content: center;
+}
+
+.scenario-item {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 18px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    position: relative;
+    overflow: hidden;
+    transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.scenario-item:hover {
+    box-shadow: 0 4px 16px rgba(30, 58, 138, 0.08);
+    transform: translateY(-1px);
+}
+
+.scenario-item::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: #94a3b8;
+}
+
+.scenario-item.scenario-low::before {
+    background: #10b981;
+}
+.scenario-item.scenario-avg::before {
+    background: #2563eb;
+}
+.scenario-item.scenario-high::before {
+    background: #ef4444;
+}
+
+.scenario-head {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: 4px;
+}
+
+.scenario-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.scenario-badge {
+    display: inline-block;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #eef2f7;
+    color: #475569;
+    white-space: nowrap;
+}
+
+.scenario-item.scenario-low .scenario-badge {
+    background: #dcfce7;
+    color: #166534;
+}
+.scenario-item.scenario-avg .scenario-badge {
+    background: #dbeafe;
+    color: #1e40af;
+}
+.scenario-item.scenario-high .scenario-badge {
+    background: #fee2e2;
+    color: #991b1b;
+}
+
+.scenario-price-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+.scenario-price-value {
+    font-weight: 700;
+    color: var(--text);
+    white-space: nowrap;
+}
+
+.scenario-chart-holder {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    max-width: 200px;
+    margin: 0 auto;
+}
+
+.scenario-chart-holder canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+.scenario-total {
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 0;
+    border-top: 1px dashed var(--border);
+    border-bottom: 1px dashed var(--border);
+}
+
+.scenario-total .st-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.scenario-total .st-value {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--primary-dark, #1e3a8a);
+    white-space: nowrap;
+}
+
+.scenario-legend {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 4px 10px;
+    font-size: 11.5px;
+}
+
+.scenario-legend .leg-row {
+    display: contents;
+}
+
+.scenario-legend .leg-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.scenario-legend .leg-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    flex: 0 0 auto;
+}
+
+.scenario-legend .leg-pct {
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    text-align: right;
+}
+
+@media (max-width: 680px) {
+    .scenarios-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* ============ Selettore periodo di analisi ============ */
+.period-selector {
+    padding: 18px 22px;
+    margin-bottom: 20px;
+}
+
+.period-main {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    flex-wrap: wrap;
+}
+
+.period-label-block {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.period-title {
+    font-size: 13.5px;
+    font-weight: 700;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.period-sub {
+    font-size: 12.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.period-mode-switcher {
+    flex: 0 0 auto;
+    flex-wrap: wrap;
+}
+
+.period-mode-switcher .seg-btn {
+    padding: 7px 14px;
+    font-size: 12.5px;
+}
+
+.period-extra {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.period-extra[hidden] {
+    display: none;
+}
+
+.period-extra label {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--text);
+    margin-right: 8px;
+}
+
+.period-extra select {
+    padding: 7px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13px;
+    min-width: 160px;
+}
+
+.period-chips-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.period-chips-hint {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.period-chips-quick {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.period-chips {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(74px, 1fr));
+    gap: 6px;
+}
+
+.period-chip {
+    padding: 7px 10px;
+    font-size: 12.5px;
+    font-weight: 600;
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text-muted);
+    border-radius: 6px;
+    cursor: pointer;
+    user-select: none;
+    transition: all 0.15s;
+    text-align: center;
+}
+
+.period-chip:hover {
+    border-color: var(--primary);
+    color: var(--primary-dark);
+    background: var(--primary-soft);
+}
+
+.period-chip.selected {
+    background: var(--primary, #2563eb);
+    color: #fff;
+    border-color: var(--primary, #2563eb);
+}
+
+.period-chip.selected:hover {
+    background: var(--primary-dark, #1e3a8a);
+    border-color: var(--primary-dark, #1e3a8a);
 }
 
 /* ============ Grafico mensile ============ */

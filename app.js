@@ -745,6 +745,273 @@
     }
 
     // =============================================================
+    // SELETTORE PERIODO DI ANALISI
+    // Consente di calcolare la composizione (pie + costi fissi/variabili)
+    // su un qualsiasi sottoinsieme dei 12 mesi, oltre alle scorciatoie:
+    //   - year       → anno intero
+    //   - avg-month  → 1/12 dell'anno (mese medio)
+    //   - custom     → una combinazione libera di mesi (anche un solo mese)
+    // =============================================================
+    const periodState = {
+        mode: "year",
+        customMonths: new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]),
+    };
+
+    let lastInputs = null;
+    let lastAnnualResult = null;
+
+    // Campi di `r` che si "scalano" proporzionalmente quando si passa
+    // dall'anno a una frazione del periodo
+    const SCALABLE_FIELDS = [
+        "consumo_annuo",
+        "quota_fissa_materia",
+        "quota_variabile_materia",
+        "spesa_materia",
+        "spesa_comm_fissa",
+        "spesa_dispacciamento_var",
+        "rete_fissa",
+        "rete_sigma2",
+        "rete_uc6s",
+        "rete_sigma3",
+        "rete_uc3",
+        "rete_uc6p",
+        "spesa_rete",
+        "oneri_asos",
+        "oneri_arim",
+        "spesa_oneri_var",
+        "accisa_totale",
+        "spesa_netta",
+        "imponibile_iva",
+        "iva_totale",
+        "totale_finale",
+    ];
+
+    function scaleResult(r, factor) {
+        const out = { ...r };
+        SCALABLE_FIELDS.forEach((f) => {
+            if (typeof r[f] === "number") out[f] = r[f] * factor;
+        });
+        return out;
+    }
+
+    // Costruisce un risultato "come r" aggregato su un sottoinsieme di mesi.
+    // - Costi fissi (quote potenza / quote fisse)    → scalati per N_sel/12
+    // - Costi variabili rete/oneri/accise            → scalati per kwh_sel/kwh_anno
+    // - Costo materia e dispacciamento variabile     → valore esatto dal
+    //   breakdown mensile (m.costo_materia / m.costo_dispacciamento)
+    // - IVA e imponibile                             → ricalcolati
+    function aggregateForMonths(p, r, monthIndexes) {
+        const N = 12;
+        const nSel = monthIndexes.length;
+        if (nSel === 0) return scaleResult(r, 0);
+
+        const timeFrac = nSel / N;
+        const md = r.monthlyDetail || [];
+        const selSet = new Set(monthIndexes);
+        const selMonths = md.filter((m) => selSet.has(m.month));
+
+        const kwhPeriod = selMonths.reduce((s, m) => s + m.kwh, 0);
+        const kwhYear = r.consumo_annuo;
+        const kwhFrac = kwhYear > 0 ? kwhPeriod / kwhYear : timeFrac;
+
+        // Materia variabile ed energia dispacciamento: usiamo i valori
+        // effettivi mese per mese (coerenti con i prezzi mensili).
+        const quota_variabile_materia = selMonths.reduce(
+            (s, m) => s + m.costo_materia,
+            0
+        );
+        const spesa_dispacciamento_var = selMonths.reduce(
+            (s, m) => s + m.costo_dispacciamento,
+            0
+        );
+
+        // Quote fisse → frazione di tempo
+        const quota_fissa_materia = r.quota_fissa_materia * timeFrac;
+        const spesa_comm_fissa = r.spesa_comm_fissa * timeFrac;
+        const rete_fissa = r.rete_fissa * timeFrac;
+        const rete_sigma2 = r.rete_sigma2 * timeFrac;
+        const rete_uc6s = r.rete_uc6s * timeFrac;
+
+        // Voci variabili non-materia → frazione di consumo
+        const rete_sigma3 = r.rete_sigma3 * kwhFrac;
+        const rete_uc3 = r.rete_uc3 * kwhFrac;
+        const rete_uc6p = r.rete_uc6p * kwhFrac;
+        const oneri_asos = r.oneri_asos * kwhFrac;
+        const oneri_arim = r.oneri_arim * kwhFrac;
+        const accisa_totale = r.accisa_totale * kwhFrac;
+
+        const spesa_materia = quota_fissa_materia + quota_variabile_materia;
+        const spesa_rete =
+            rete_fissa +
+            rete_sigma2 +
+            rete_uc6s +
+            rete_sigma3 +
+            rete_uc3 +
+            rete_uc6p;
+        const spesa_oneri_var = oneri_asos + oneri_arim;
+
+        const spesa_netta =
+            quota_fissa_materia +
+            quota_variabile_materia +
+            spesa_comm_fissa +
+            spesa_dispacciamento_var +
+            spesa_rete +
+            spesa_oneri_var;
+
+        const sconto = (p.sconto_una_tantum || 0) * timeFrac;
+        const imponibile_iva = spesa_netta + accisa_totale - sconto;
+        const iva_totale = imponibile_iva * (p.iva_rate || 0);
+        const totale_finale = imponibile_iva + iva_totale;
+
+        return {
+            ...r,
+            consumo_annuo: kwhPeriod,
+            quota_fissa_materia,
+            quota_variabile_materia,
+            spesa_materia,
+            spesa_comm_fissa,
+            spesa_dispacciamento_var,
+            rete_fissa,
+            rete_sigma2,
+            rete_uc6s,
+            rete_sigma3,
+            rete_uc3,
+            rete_uc6p,
+            spesa_rete,
+            oneri_asos,
+            oneri_arim,
+            spesa_oneri_var,
+            accisa_totale,
+            spesa_netta,
+            imponibile_iva,
+            iva_totale,
+            totale_finale,
+        };
+    }
+
+    function getPeriodResult(p, r) {
+        switch (periodState.mode) {
+            case "year":
+                return r;
+            case "avg-month":
+                return scaleResult(r, 1 / 12);
+            case "custom": {
+                const arr = [...periodState.customMonths];
+                return aggregateForMonths(p, r, arr);
+            }
+            default:
+                return r;
+        }
+    }
+
+    function formatKwh(n) {
+        return `${n.toLocaleString("it-IT", {
+            minimumFractionDigits: 0,
+            maximumFractionDigits: 2,
+        })} kWh`;
+    }
+
+    function describePeriod(p, r, pr) {
+        switch (periodState.mode) {
+            case "year":
+                return `Totale annuo — ${EUR(pr.totale_finale)} · ${formatKwh(pr.consumo_annuo)}`;
+            case "avg-month":
+                return `Mese medio (annuo ÷ 12) — ${EUR(pr.totale_finale)} · ${formatKwh(pr.consumo_annuo)}`;
+            case "custom": {
+                const sel = [...periodState.customMonths].sort((a, b) => a - b);
+                if (sel.length === 0) return "Nessun mese selezionato";
+                if (sel.length === 12)
+                    return `Tutti i mesi — ${EUR(pr.totale_finale)} · ${formatKwh(pr.consumo_annuo)}`;
+                if (sel.length === 1)
+                    return `${MONTHS_LONG[sel[0]]} — ${EUR(pr.totale_finale)} · ${formatKwh(pr.consumo_annuo)}`;
+                const names = sel.map((i) => MONTHS[i]).join(", ");
+                return `${sel.length} mesi (${names}) — ${EUR(pr.totale_finale)} · ${formatKwh(pr.consumo_annuo)}`;
+            }
+            default:
+                return "";
+        }
+    }
+
+    function renderPeriodChips() {
+        const grid = $("#periodChipsGrid");
+        if (!grid) return;
+        grid.innerHTML = MONTHS.map((name, i) => {
+            const selected = periodState.customMonths.has(i) ? " selected" : "";
+            return `<button type="button" class="period-chip${selected}" data-month="${i}">${name}</button>`;
+        }).join("");
+    }
+
+    function updatePeriodExtraVisibility() {
+        const c = $("#periodCustomControl");
+        if (c) c.hidden = periodState.mode !== "custom";
+    }
+
+    function renderBreakdownSection(p, r) {
+        const pr = getPeriodResult(p, r);
+        renderFixedVariable(p, pr);
+        renderPieChart(pr);
+        const info = $("#periodInfo");
+        if (info) info.textContent = describePeriod(p, r, pr);
+    }
+
+    function refreshBreakdown() {
+        if (lastInputs && lastAnnualResult) {
+            renderBreakdownSection(lastInputs, lastAnnualResult);
+        }
+    }
+
+    function setupPeriodSelector() {
+        renderPeriodChips();
+        updatePeriodExtraVisibility();
+
+        // Segmented: cambio modalità
+        $$(".period-mode-switcher .seg-btn").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                const mode = btn.dataset.value;
+                if (periodState.mode === mode) return;
+                periodState.mode = mode;
+                $$(".period-mode-switcher .seg-btn").forEach((b) =>
+                    b.classList.toggle("active", b.dataset.value === mode)
+                );
+                updatePeriodExtraVisibility();
+                refreshBreakdown();
+            });
+        });
+
+        // Chips del periodo personalizzato (event delegation)
+        $("#periodChipsGrid")?.addEventListener("click", (e) => {
+            const chip = e.target.closest(".period-chip");
+            if (!chip) return;
+            const m = parseInt(chip.dataset.month, 10);
+            if (isNaN(m)) return;
+            if (periodState.customMonths.has(m)) {
+                periodState.customMonths.delete(m);
+                chip.classList.remove("selected");
+            } else {
+                periodState.customMonths.add(m);
+                chip.classList.add("selected");
+            }
+            refreshBreakdown();
+        });
+
+        // Pulsanti rapidi: tutti / nessuno / inverno / estate
+        $$(".period-chips-quick .mini-btn").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                const act = btn.dataset.periodQuick;
+                let months;
+                if (act === "all") months = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+                else if (act === "none") months = [];
+                else if (act === "winter") months = [0, 1, 10, 11]; // gen, feb, nov, dic
+                else if (act === "summer") months = [5, 6, 7, 8]; // giu, lug, ago, set
+                else return;
+                periodState.customMonths = new Set(months);
+                renderPeriodChips();
+                refreshBreakdown();
+            });
+        });
+    }
+
+    // =============================================================
     // RENDERING — costi fissi vs variabili
     // =============================================================
     function renderFixedVariable(p, r) {
@@ -837,43 +1104,105 @@
 
     // =============================================================
     // RENDERING — Grafico a torta dinamico
-    // Ogni componente può essere attivato/disattivato.
-    // Accise e IVA sono opzionali (off di default).
+    // Tre modalità di aggregazione:
+    //   - macro     → raggruppamento per macro categoria (default)
+    //   - detailed  → singola voce tariffaria (ASOS, ARIM, σ1/σ2/σ3, UC3/UC6...)
+    //   - fixedvar  → costi fissi vs variabili vs imposte
+    // In ogni modalità le voci sono singolarmente attivabili/disattivabili
+    // cliccando sulla legenda. I pulsanti "Mostra tutto" / "Solo netto
+    // imposte" operano sulla modalità attualmente selezionata.
     // =============================================================
     let pieChartInstance = null;
 
-    // Stato persistente tra una simulazione e l'altra
-    const PIE_COMPONENTS = [
-        { id: "materia", label: "Vendita energia (materia)", color: "#2563eb", visible: true },
-        { id: "dispacciamento", label: "Dispacciamento", color: "#0ea5e9", visible: true },
-        { id: "rete", label: "Tariffa uso rete", color: "#10b981", visible: true },
-        { id: "oneri", label: "Oneri di sistema", color: "#f59e0b", visible: true },
-        { id: "accise", label: "Accise", color: "#ef4444", visible: false },
-        { id: "iva", label: "IVA", color: "#8b5cf6", visible: false },
-    ];
+    const PIE_MODES = {
+        macro: {
+            components: [
+                { id: "materia",        label: "Vendita energia (materia)", color: "#2563eb", visible: true,  isTax: false, value: (r) => r.spesa_materia },
+                { id: "dispacciamento", label: "Dispacciamento",            color: "#0ea5e9", visible: true,  isTax: false, value: (r) => r.spesa_comm_fissa + r.spesa_dispacciamento_var },
+                { id: "rete",           label: "Tariffa uso rete",          color: "#10b981", visible: true,  isTax: false, value: (r) => r.spesa_rete },
+                { id: "oneri",          label: "Oneri di sistema",          color: "#f59e0b", visible: true,  isTax: false, value: (r) => r.spesa_oneri_var },
+                { id: "accise",         label: "Accise",                    color: "#ef4444", visible: false, isTax: true,  value: (r) => r.accisa_totale },
+                { id: "iva",            label: "IVA",                       color: "#8b5cf6", visible: false, isTax: true,  value: (r) => r.iva_totale },
+            ],
+        },
+        detailed: {
+            components: [
+                { id: "p_fix_v",   label: "Commercializzazione P<sub>FIX,V</sub>",           color: "#1e40af", visible: true,  isTax: false, value: (r) => r.quota_fissa_materia },
+                { id: "energia",   label: "Energia (1+λ)(P<sub>INGM</sub>+α)·kWh",           color: "#3b82f6", visible: true,  isTax: false, value: (r) => r.quota_variabile_materia },
+                { id: "disp_f",    label: "Dispacciamento DISP<sub>BT,F</sub>",              color: "#0369a1", visible: true,  isTax: false, value: (r) => r.spesa_comm_fissa },
+                { id: "disp_v",    label: "Dispacciamento c<sub>DISPd</sub>·kWh",            color: "#0ea5e9", visible: true,  isTax: false, value: (r) => r.spesa_dispacciamento_var },
+                { id: "rete_s1",   label: "Rete σ<sub>1</sub> (quota fissa)",                color: "#065f46", visible: true,  isTax: false, value: (r) => r.rete_fissa },
+                { id: "rete_s2",   label: "Rete σ<sub>2</sub> · potenza impegnata",          color: "#10b981", visible: true,  isTax: false, value: (r) => r.rete_sigma2 },
+                { id: "rete_uc6s", label: "Rete UC6 qualità potenza · potenza",              color: "#34d399", visible: true,  isTax: false, value: (r) => r.rete_uc6s },
+                { id: "rete_s3",   label: "Rete σ<sub>3</sub> · kWh",                        color: "#0d9488", visible: true,  isTax: false, value: (r) => r.rete_sigma3 },
+                { id: "rete_uc3",  label: "Rete UC3 · kWh",                                  color: "#14b8a6", visible: true,  isTax: false, value: (r) => r.rete_uc3 },
+                { id: "rete_uc6p", label: "Rete UC6 qualità energia · kWh",                  color: "#5eead4", visible: true,  isTax: false, value: (r) => r.rete_uc6p },
+                { id: "asos",      label: "Oneri A<sub>SOS</sub> · kWh",                     color: "#f59e0b", visible: true,  isTax: false, value: (r) => r.oneri_asos },
+                { id: "arim",      label: "Oneri A<sub>RIM</sub> · kWh",                     color: "#f97316", visible: true,  isTax: false, value: (r) => r.oneri_arim },
+                { id: "accise",    label: "Accise",                                          color: "#ef4444", visible: false, isTax: true,  value: (r) => r.accisa_totale },
+                { id: "iva",       label: "IVA",                                             color: "#8b5cf6", visible: false, isTax: true,  value: (r) => r.iva_totale },
+            ],
+        },
+        fixedvar: {
+            components: [
+                {
+                    id: "fissi",
+                    label: "Costi fissi (non dipendono dal consumo)",
+                    color: "#1e40af",
+                    visible: true,
+                    isTax: false,
+                    value: (r) =>
+                        r.quota_fissa_materia +
+                        r.spesa_comm_fissa +
+                        r.rete_fissa +
+                        r.rete_sigma2 +
+                        r.rete_uc6s,
+                },
+                {
+                    id: "variabili",
+                    label: "Costi variabili (proporzionali al consumo)",
+                    color: "#10b981",
+                    visible: true,
+                    isTax: false,
+                    value: (r) =>
+                        r.quota_variabile_materia +
+                        r.spesa_dispacciamento_var +
+                        r.rete_sigma3 +
+                        r.rete_uc3 +
+                        r.rete_uc6p +
+                        r.oneri_asos +
+                        r.oneri_arim,
+                },
+                {
+                    id: "imposte",
+                    label: "Imposte (accise + IVA)",
+                    color: "#ef4444",
+                    visible: false,
+                    isTax: true,
+                    value: (r) => r.accisa_totale + r.iva_totale,
+                },
+            ],
+        },
+    };
+
+    let currentPieMode = "macro";
+
+    function getPieComponents() {
+        return PIE_MODES[currentPieMode].components;
+    }
 
     // Ultimo risultato calcolato, necessario per ri-renderizzare al toggle
     let lastResult = null;
 
-    function getComponentValue(id, r) {
-        switch (id) {
-            case "materia": return r.spesa_materia;
-            case "dispacciamento": return r.spesa_comm_fissa + r.spesa_dispacciamento_var;
-            case "rete": return r.spesa_rete;
-            case "oneri": return r.spesa_oneri_var;
-            case "accise": return r.accisa_totale;
-            case "iva": return r.iva_totale;
-            default: return 0;
-        }
-    }
-
     function renderPieChart(r) {
         lastResult = r;
 
+        const components = getPieComponents();
+
         // Arricchisce ogni componente con il valore corrente
-        const enriched = PIE_COMPONENTS.map((c) => ({
+        const enriched = components.map((c) => ({
             ...c,
-            value: getComponentValue(c.id, r),
+            value: c.value(r),
         }));
 
         // Solo quelli visibili e con valore > 0 entrano nel grafico
@@ -907,7 +1236,7 @@
         $$("#pieLegend .pie-legend-item").forEach((el) => {
             el.addEventListener("click", () => {
                 const id = el.dataset.id;
-                const comp = PIE_COMPONENTS.find((x) => x.id === id);
+                const comp = getPieComponents().find((x) => x.id === id);
                 if (!comp) return;
                 comp.visible = !comp.visible;
                 renderPieChart(lastResult);
@@ -929,7 +1258,7 @@
             ? active.map((c) => c.color)
             : ["#e4e8f0"];
         const labels = active.length
-            ? active.map((c) => c.label)
+            ? active.map((c) => c.label.replace(/<[^>]+>/g, ""))
             : ["Nessuna componente selezionata"];
 
         pieChartInstance = new Chart(ctx, {
@@ -969,20 +1298,254 @@
         });
     }
 
-    // Controlli rapidi del grafico
+    // Controlli rapidi del grafico (modalità + shortcut imposte)
     function setupPieControls() {
+        // Selettore modalità di aggregazione
+        $$(".pie-mode-switcher .seg-btn").forEach((btn) => {
+            btn.addEventListener("click", () => {
+                const mode = btn.dataset.value;
+                if (!PIE_MODES[mode] || mode === currentPieMode) return;
+                currentPieMode = mode;
+                $$(".pie-mode-switcher .seg-btn").forEach((b) =>
+                    b.classList.toggle("active", b.dataset.value === mode)
+                );
+                if (lastResult) renderPieChart(lastResult);
+            });
+        });
+
+        // Shortcut mostra tutto / solo netto imposte
         $$(".pie-controls .mini-btn").forEach((btn) => {
             btn.addEventListener("click", () => {
                 const action = btn.dataset.action;
+                const comps = getPieComponents();
                 if (action === "all") {
-                    PIE_COMPONENTS.forEach((c) => (c.visible = true));
+                    comps.forEach((c) => (c.visible = true));
                 } else if (action === "none") {
-                    PIE_COMPONENTS.forEach((c) => {
-                        c.visible = !(c.id === "accise" || c.id === "iva");
-                    });
+                    comps.forEach((c) => (c.visible = !c.isTax));
                 }
                 if (lastResult) renderPieChart(lastResult);
             });
+        });
+    }
+
+    // =============================================================
+    // RENDERING — Confronto scenari di prezzo energia
+    // Mostra 3 mini-donut (prezzo minimo / medio / massimo) per capire
+    // come cambia la distribuzione dei costi al variare del P_INGM.
+    // Se l'utente ha impostato un prezzo uniforme, viene mostrato un
+    // solo scenario (con etichetta "uniforme").
+    // =============================================================
+    const SCENARIO_COMPONENTS = [
+        { id: "materia",        label: "Vendita energia (materia)", color: "#2563eb" },
+        { id: "dispacciamento", label: "Dispacciamento",            color: "#0ea5e9" },
+        { id: "rete",           label: "Tariffa uso rete",          color: "#10b981" },
+        { id: "oneri",          label: "Oneri di sistema",          color: "#f59e0b" },
+        { id: "accise",         label: "Accise",                    color: "#ef4444" },
+        { id: "iva",            label: "IVA",                       color: "#8b5cf6" },
+    ];
+
+    let scenarioChartInstances = [];
+
+    function computeScenarioBill(p, targetPIngm) {
+        // Rieseguiamo il calcolo sostituendo il prezzo energia con un
+        // valore uniforme, mantenendo invariato tutto il resto (consumo,
+        // potenza, tariffe, quote, imposte, ecc.).
+        const pScenario = {
+            ...p,
+            priceMode: "single",
+            p_ingm_f0: targetPIngm,
+            monthlyPrices: Array(12).fill(targetPIngm),
+        };
+        return computeBill(pScenario);
+    }
+
+    function scenarioSegments(r) {
+        return SCENARIO_COMPONENTS.map((c) => {
+            let v = 0;
+            switch (c.id) {
+                case "materia":        v = r.spesa_materia; break;
+                case "dispacciamento": v = r.spesa_comm_fissa + r.spesa_dispacciamento_var; break;
+                case "rete":           v = r.spesa_rete; break;
+                case "oneri":          v = r.spesa_oneri_var; break;
+                case "accise":         v = r.accisa_totale; break;
+                case "iva":            v = r.iva_totale; break;
+            }
+            return { ...c, value: v };
+        }).filter((s) => s.value > 0);
+    }
+
+    function buildScenarios(p, r) {
+        // Ricaviamo i prezzi mensili effettivamente in uso
+        const prices = p.priceMode === "monthly"
+            ? p.monthlyPrices.slice()
+            : Array(12).fill(p.p_ingm_f0);
+
+        const minP = Math.min(...prices);
+        const maxP = Math.max(...prices);
+        const uniform = p.priceMode === "single" || minP === maxP;
+
+        if (uniform) {
+            const price = p.priceMode === "single" ? p.p_ingm_f0 : minP;
+            return [{
+                key: "uniform",
+                title: "Scenario corrente",
+                badge: "Uniforme",
+                priceLabel: "Prezzo energia",
+                priceValue: `${NUM4(price)} €/kWh`,
+                result: r,
+            }];
+        }
+
+        // Media ponderata sui kWh mensili
+        const kwhByMonth = p.consumptionMode === "uniform"
+            ? Array(12).fill(p.consumo_annuo / 12)
+            : p.monthlyKwh.slice();
+        const totKwh = kwhByMonth.reduce((s, v) => s + v, 0);
+        const avgP = totKwh > 0
+            ? prices.reduce((s, pr, i) => s + pr * kwhByMonth[i], 0) / totKwh
+            : prices.reduce((s, v) => s + v, 0) / prices.length;
+
+        const minIdx = prices.indexOf(minP);
+        const maxIdx = prices.indexOf(maxP);
+
+        return [
+            {
+                key: "low",
+                title: "Prezzo minimo",
+                badge: "Basso",
+                priceLabel: `Minimo (${MONTHS_LONG[minIdx]})`,
+                priceValue: `${NUM4(minP)} €/kWh`,
+                result: computeScenarioBill(p, minP),
+            },
+            {
+                key: "avg",
+                title: "Prezzo medio",
+                badge: "Medio",
+                priceLabel: "Media ponderata sui kWh",
+                priceValue: `${NUM4(avgP)} €/kWh`,
+                result: computeScenarioBill(p, avgP),
+            },
+            {
+                key: "high",
+                title: "Prezzo massimo",
+                badge: "Alto",
+                priceLabel: `Massimo (${MONTHS_LONG[maxIdx]})`,
+                priceValue: `${NUM4(maxP)} €/kWh`,
+                result: computeScenarioBill(p, maxP),
+            },
+        ];
+    }
+
+    function renderPriceScenarios(p, r) {
+        const container = $("#priceScenarios");
+        if (!container) return;
+
+        // Distruggi i chart precedenti
+        scenarioChartInstances.forEach((c) => c.destroy());
+        scenarioChartInstances = [];
+
+        const scenarios = buildScenarios(p, r);
+        const isSingle = scenarios.length === 1;
+
+        container.classList.toggle("is-single", isSingle);
+
+        // Aggiorna il sottotitolo della card
+        const intro = $("#scenariosIntro");
+        if (intro) {
+            intro.textContent = isSingle
+                ? "Hai impostato un prezzo energia uniforme: la simulazione mostra un unico scenario."
+                : "Come cambia la composizione della bolletta al variare del prezzo della materia energia. Tre scenari: prezzo mensile più basso, media ponderata sui kWh, prezzo mensile più alto.";
+        }
+
+        // Pre-calcola i segmenti e i totali per ogni scenario
+        const prepared = scenarios.map((sc) => {
+            const segs = scenarioSegments(sc.result);
+            const tot = segs.reduce((s, v) => s + v.value, 0);
+            return { ...sc, segments: segs, segmentTotal: tot };
+        });
+
+        container.innerHTML = prepared
+            .map((sc, idx) => {
+                const legend = sc.segments
+                    .map((seg) => {
+                        const pct = sc.segmentTotal > 0
+                            ? (seg.value / sc.segmentTotal) * 100
+                            : 0;
+                        return `
+                            <div class="leg-row">
+                                <span class="leg-label" title="${seg.label}">
+                                    <span class="leg-swatch" style="background:${seg.color}"></span>
+                                    <span>${seg.label}</span>
+                                </span>
+                                <span class="leg-pct">${PCT(pct)}</span>
+                            </div>`;
+                    })
+                    .join("");
+
+                return `
+                    <div class="scenario-item scenario-${sc.key}">
+                        <div class="scenario-head">
+                            <div class="scenario-title">
+                                <span>${sc.title}</span>
+                                <span class="scenario-badge">${sc.badge}</span>
+                            </div>
+                            <div class="scenario-price-label">
+                                ${sc.priceLabel}:
+                                <span class="scenario-price-value">${sc.priceValue}</span>
+                            </div>
+                        </div>
+                        <div class="scenario-chart-holder">
+                            <canvas id="scenarioPie-${idx}"></canvas>
+                        </div>
+                        <div class="scenario-total">
+                            <span class="st-label">Totale bolletta</span>
+                            <span class="st-value">${EUR(sc.result.totale_finale)}</span>
+                        </div>
+                        <div class="scenario-legend">${legend}</div>
+                    </div>
+                `;
+            })
+            .join("");
+
+        // Istanzia i mini-donut
+        prepared.forEach((sc, idx) => {
+            const canvas = document.getElementById(`scenarioPie-${idx}`);
+            if (!canvas) return;
+            const ctx = canvas.getContext("2d");
+            const chart = new Chart(ctx, {
+                type: "doughnut",
+                data: {
+                    labels: sc.segments.map((s) => s.label),
+                    datasets: [{
+                        data: sc.segments.map((s) => s.value),
+                        backgroundColor: sc.segments.map((s) => s.color),
+                        borderColor: "#fff",
+                        borderWidth: 2,
+                        hoverOffset: 6,
+                    }],
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: "58%",
+                    animation: { duration: 350 },
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => {
+                                    const v = ctx.parsed;
+                                    const pct = sc.segmentTotal > 0
+                                        ? (v / sc.segmentTotal) * 100
+                                        : 0;
+                                    return ` ${EUR(v)} — ${PCT(pct)}`;
+                                },
+                            },
+                        },
+                    },
+                },
+            });
+            scenarioChartInstances.push(chart);
         });
     }
 
@@ -2139,10 +2702,16 @@
         const inputs = readInputs();
         const result = computeBill(inputs);
 
+        // Memorizziamo i riferimenti annuali per permettere al selettore
+        // di periodo (tab "Peso delle componenti") di ricalcolare le
+        // slice senza rieseguire la simulazione completa.
+        lastInputs = inputs;
+        lastAnnualResult = result;
+
         renderReport(inputs, result);
         renderMonthlyDetail(inputs, result);
-        renderFixedVariable(inputs, result);
-        renderPieChart(result);
+        renderBreakdownSection(inputs, result);
+        renderPriceScenarios(inputs, result);
         renderSummary(inputs, result);
 
         $("#results").classList.remove("hidden");
@@ -2192,6 +2761,7 @@
         setupTabs();
         setupReportView();
         setupPieControls();
+        setupPeriodSelector();
         setupMonthlyUI();
 
         $("#simForm").addEventListener("submit", (e) => {
